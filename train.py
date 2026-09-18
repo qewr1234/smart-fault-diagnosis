@@ -25,6 +25,7 @@ from sklearn.preprocessing import LabelEncoder
 from config import CONFIG
 from src import artifacts
 from src.calibration import temperature_scale_grid
+from src.discovery import discover_hard_cluster
 from src.models import fit_architecture
 from src.pipeline import FeaturePipeline, augment_with_anomaly_score
 from src.postprocess import PostProcessSpec, fit_postprocess, nested_estimate
@@ -78,20 +79,34 @@ def run(cfg):
     y_all = le.fit_transform(train["target"].values)
     K = len(le.classes_)
 
-    # X_11 클리핑 경계만 test 피처 분포에서 얻는다 (라벨은 보지 않음).
+    # 분포 shift 컬럼 탐지에 쓸 참조 분포 (피처 분위수만 사용, 라벨은 보지 않음).
     reference = None
-    if cfg["CLIP_X11"]:
+    if cfg["CLIP_SHIFT_COLS"]:
         test_path = data_dir / "test.csv"
         if test_path.exists():
             reference = pd.read_csv(test_path)[feat]
         else:
-            log.info("[Clip] test.csv 없음 -> X_11 클리핑 생략")
+            log.info("[Shift] test.csv 없음 -> shift 클리핑 생략")
 
-    pipe = FeaturePipeline(feat_cols=feat, use_fdi=cfg["USE_FDI_FEATURES"],
-                           clip_x11=cfg["CLIP_X11"], add_pairdiff=cfg["ADD_PAIRDIFF"],
-                           topk_var=cfg["TOPK_VAR"])
-    X_all = pipe.fit(train, reference)
+    pipe = FeaturePipeline(
+        feat_cols=feat, use_fdi=cfg["USE_FDI_FEATURES"],
+        clip_shift=cfg["CLIP_SHIFT_COLS"], add_pairdiff=cfg["ADD_PAIRDIFF"],
+        topk_var=cfg["TOPK_VAR"], auto_discover=cfg["AUTO_DISCOVER"],
+        corr_threshold=cfg["CORR_THRESHOLD"], exact_dup_threshold=cfg["EXACT_DUP_THRESHOLD"],
+        max_redundant_pairs=cfg["MAX_REDUNDANT_PAIRS"],
+        shift_excess_ratio=cfg["SHIFT_EXCESS_RATIO"],
+        shift_outside_frac=cfg["SHIFT_OUTSIDE_FRAC"], max_shift_cols=cfg["MAX_SHIFT_COLS"],
+        n_signature_cols=cfg["N_SIGNATURE_COLS"])
+    X_all = pipe.fit(train, reference, y=y_all)
+    report = pipe.discovery_report()
     log.info("[Pipeline] features=%d (원본 %d)", X_all.shape[1], len(feat))
+    if cfg["AUTO_DISCOVER"]:
+        log.info("[Discover] 완전중복 그룹=%s -> 제거 %s",
+                 report["exact_duplicate_groups"], report["dropped_duplicate_cols"])
+        log.info("[Discover] 준중복 쌍 %d개: %s",
+                 len(report["redundant_pairs"]), report["redundant_pairs"][:4])
+        log.info("[Discover] shift 컬럼=%s | 분산 시그니처=%s",
+                 report["shift_columns"], report["signature_columns"])
 
     class_weights = None
     if cfg["USE_CLASS_WEIGHT"]:
@@ -106,7 +121,13 @@ def run(cfg):
         except ImportError:
             log.warning("[Expert] lightgbm 미설치 -> 전문가 비활성화")
             use_expert = False
-    hard = sorted(cfg["HARD_CLUSTER"])
+
+    # 하드클러스터: "auto" 면 검증 예측의 혼동 구조에서 도출하고,
+    # 리스트를 주면 그 값을 그대로 쓴다.
+    configured_cluster = cfg["HARD_CLUSTER"]
+    auto_cluster = isinstance(configured_cluster, str) and configured_cluster.lower() == "auto"
+    hard = None if auto_cluster else sorted(configured_cluster)
+    cluster_info = {"cluster": hard, "source": "config" if not auto_cluster else None}
 
     run_dir = _make_run_dir(cfg)
     pipe.save(run_dir / artifacts.PIPELINE_FILE)
@@ -124,15 +145,18 @@ def run(cfg):
         log.info("\n========== SEED %d/%d (seed=%d) ==========", si, len(cfg["SEEDS"]), seed)
         set_seed(seed)
         skf = StratifiedKFold(n_splits=cfg["CV_FOLDS"], shuffle=True, random_state=seed)
+        folds = list(skf.split(X_all, y_all))
 
         oof = {n: np.zeros((X_all.shape[0], K)) for n in model_names}
-        oof_expert = np.zeros((X_all.shape[0], len(hard))) if use_expert else None
+        fold_iso = {}
+        inner_probs, inner_targets = [], []
 
-        for fi, (tr_idx, va_idx) in enumerate(skf.split(X_all, y_all), 1):
+        # ---------- pass 1: 딥러닝 모델 ----------
+        for fi, (tr_idx, va_idx) in enumerate(folds, 1):
             log.info("\n===== FOLD %d/%d (seed=%d) =====", fi, cfg["CV_FOLDS"], seed)
             Xtr, Xva = X_all[tr_idx], X_all[va_idx]
             ytr, yva = y_all[tr_idx], y_all[va_idx]
-            fdir = artifacts.fold_dir(run_dir, seed, fi, create=True)
+            artifacts.fold_dir(run_dir, seed, fi, create=True)
 
             iso = None
             if cfg["USE_ISOFOREST"]:
@@ -140,6 +164,7 @@ def run(cfg):
                                       random_state=seed + fi, n_jobs=1).fit(Xtr)
                 import joblib
                 joblib.dump(iso, artifacts.isoforest_path(run_dir, seed, fi))
+            fold_iso[fi] = iso
             Xtr_aug = augment_with_anomaly_score(Xtr, iso)
             Xva_aug = augment_with_anomaly_score(Xva, iso)
 
@@ -171,6 +196,7 @@ def run(cfg):
             mc_kw = dict(mc_passes=max(1, cfg["MC_PASSES"]), enable_dropout=cfg["MC_DROPOUT"],
                          tta_noise_std=cfg["TTA_NOISE_STD"])
 
+            fold_inner = []
             for name in model_names:
                 _, predictor = fit_architecture(name, X_fit, y_fit, X_inner, y_inner, K, **common_kw)
                 # 온도는 내부 홀드아웃에서만 고른다 -> 바깥 fold OOF는 깨끗하다.
@@ -178,18 +204,45 @@ def run(cfg):
                 predictor.temperature = temperature_scale_grid(p_inner, y_inner, mode=cfg["TEMP_MODE"])
                 oof[name][va_idx] = predictor(Xva_aug, **mc_kw)
                 predictor.save(artifacts.model_path(run_dir, seed, fi, name))
+                fold_inner.append(p_inner)
 
-            if use_expert:
-                from src.expert import fit_expert
-                import joblib
-                exp_model = fit_expert(Xtr_aug, ytr, hard,
+            inner_probs.append(np.mean(np.stack(fold_inner, axis=0), axis=0))
+            inner_targets.append(y_inner)
+
+        # ---------- 하드클러스터 도출 ----------
+        if use_expert and hard is None:
+            source = "inner_holdout" if all(nested_calibration_used) else "outer_fold"
+            cluster_info = discover_hard_cluster(
+                np.concatenate(inner_targets), np.vstack(inner_probs),
+                f1_quantile=cfg["CLUSTER_F1_QUANTILE"],
+                min_confusion=cfg["CLUSTER_MIN_CONFUSION"],
+                max_size=cfg["CLUSTER_MAX_SIZE"])
+            cluster_info["source"] = source
+            hard = sorted(cluster_info["cluster"])
+            if hard:
+                log.info("[Cluster] 도출된 하드클러스터=%s (후보=%s, F1 임계=%.3f, 출처=%s)",
+                         hard, cluster_info["candidates"], cluster_info["f1_threshold"], source)
+            else:
+                log.warning("[Cluster] 상호 혼동 클러스터를 찾지 못함 -> 전문가 모델 비활성화")
+                use_expert = False
+
+        # ---------- pass 2: 하드클러스터 전문가 ----------
+        oof_expert = None
+        if use_expert and hard:
+            from src.expert import fit_expert
+            import joblib
+            oof_expert = np.zeros((X_all.shape[0], len(hard)))
+            for fi, (tr_idx, va_idx) in enumerate(folds, 1):
+                Xtr_aug = augment_with_anomaly_score(X_all[tr_idx], fold_iso[fi])
+                Xva_aug = augment_with_anomaly_score(X_all[va_idx], fold_iso[fi])
+                exp_model = fit_expert(Xtr_aug, y_all[tr_idx], hard,
                                        n_estimators=cfg["EXPERT_N_ESTIMATORS"], seed=seed + fi)
                 oof_expert[va_idx] = exp_model.predict_proba(Xva_aug)
                 joblib.dump(exp_model, artifacts.expert_path(run_dir, seed, fi))
 
         seed_key = str(seed)
         oof_by_seed[seed_key] = oof
-        if use_expert:
+        if oof_expert is not None:
             expert_by_seed[seed_key] = oof_expert
         per_model_scores[seed_key] = {}
         for name in model_names:
@@ -200,7 +253,7 @@ def run(cfg):
     # ---------- 후처리 파라미터 선택 ----------
     spec = PostProcessSpec(
         blend_mode=cfg["BLEND_MODE"], use_expert=use_expert,
-        expert_w_grid=tuple(cfg["EXPERT_W_GRID"]), hard_cluster=tuple(hard),
+        expert_w_grid=tuple(cfg["EXPERT_W_GRID"]), hard_cluster=tuple(hard or ()),
         smooth_eps=cfg["SMOOTH_EPS"], use_bias_tune=cfg["USE_BIAS_TUNE"],
         bias_lim=cfg["BIAS_LIM"], use_balanced_assign=cfg["USE_BALANCED_ASSIGN"],
     )
@@ -233,6 +286,12 @@ def run(cfg):
         "nested_folds": nested["n_splits"],
         "nested_calibration": bool(all(nested_calibration_used)) if nested_calibration_used else False,
         "inner_val_frac": cfg["INNER_VAL_FRAC"],
+        "discovery": report,
+        "hard_cluster": list(hard or []),
+        "hard_cluster_source": cluster_info.get("source"),
+        "hard_cluster_class_f1": cluster_info.get("class_f1"),
+        "hard_cluster_candidates": cluster_info.get("candidates"),
+        "expert_enabled": bool(use_expert and hard),
     }
     artifacts.write_json(run_dir / artifacts.METRICS_FILE, metrics)
     artifacts.write_json(run_dir / artifacts.POSTPROCESS_FILE, pp_fit.to_dict())

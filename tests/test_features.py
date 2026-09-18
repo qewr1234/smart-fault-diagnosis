@@ -29,7 +29,7 @@ def test_add_fdi_features_adds_residuals_and_drops_exact_dups(frames):
     tr, te = frames
     out_tr, out_te = add_fdi_features(tr, te, FEAT_COLS)
     residual_cols = [f"r_{a}_{b}" for a, b in REDUNDANT_PAIRS]
-    for c in residual_cols + ["dev_mean", "dev_max", "dev_X48"]:
+    for c in residual_cols + ["dev_mean", "dev_max", "dev_X_48"]:
         assert c in out_tr.columns and c in out_te.columns
     for c in EXACT_DUP_DROP:
         assert c not in out_tr.columns and c not in out_te.columns

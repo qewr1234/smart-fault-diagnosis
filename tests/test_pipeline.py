@@ -69,11 +69,13 @@ def test_train_writes_complete_run_directory(trained_run):
     assert seeds == ["42"]
     folds = artifacts.discover_folds(run_dir, "42")
     assert len(folds) == 2
+    metrics = json.loads((run_dir / artifacts.METRICS_FILE).read_text())
     for fold in folds:
         assert (fold / "isoforest.joblib").exists()
-        assert (fold / "expert.joblib").exists()
         for arch in ("ft", "mixer", "glu"):
             assert (fold / f"model_{arch}.pt").exists()
+        # 전문가는 하드클러스터가 도출됐을 때만 존재한다
+        assert (fold / "expert.joblib").exists() == metrics["expert_enabled"]
 
     oof = np.load(run_dir / artifacts.OOF_PROBS_FILE)
     assert oof.shape[1] == N_CLASSES
@@ -90,6 +92,33 @@ def test_metrics_report_nested_and_selection_scores(trained_run):
     assert m["raw_blend_f1"] is not None
     assert m["nested_folds"] == 2
     assert set(m["per_model_oof"]["42"]) == {"ft", "mixer", "glu"}
+
+
+@pytest.mark.slow
+def test_metrics_record_what_was_discovered(trained_run):
+    """하드코딩 상수 대신 도출 결과가 기록되어야 한다."""
+    run_dir, _ = trained_run
+    m = json.loads((run_dir / artifacts.METRICS_FILE).read_text())
+    d = m["discovery"]
+    assert d["auto_discover"] is True
+    # 합성 데이터에 심어 둔 완전 중복(X_45=X_06, X_17=X_10)을 찾아내야 한다
+    assert d["dropped_duplicate_cols"] == ["X_17", "X_45"]
+    assert ["X_06", "X_45"] in d["exact_duplicate_groups"]
+    assert isinstance(d["redundant_pairs"], list)
+    assert d["n_features_out"] == m["n_features"]
+
+    # 하드클러스터는 config 상수가 아니라 검증 예측에서 나온다
+    assert m["hard_cluster_source"] in {"inner_holdout", "outer_fold"}
+    assert len(m["hard_cluster_class_f1"]) == N_CLASSES
+    assert m["expert_enabled"] == bool(m["hard_cluster"])
+
+
+@pytest.mark.slow
+def test_postprocess_cluster_matches_discovered_cluster(trained_run):
+    run_dir, _ = trained_run
+    m = json.loads((run_dir / artifacts.METRICS_FILE).read_text())
+    pp = json.loads((run_dir / artifacts.POSTPROCESS_FILE).read_text())
+    assert pp["spec"]["hard_cluster"] == m["hard_cluster"]
 
 
 @pytest.mark.slow

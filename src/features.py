@@ -13,13 +13,14 @@ from itertools import combinations
 import numpy as np
 from scipy.stats import kurtosis, skew
 
-# 검증에서 확인된 준중복 센서쌍 (train |corr| > 0.95)
+# 아래 상수는 원본 데이터에서 관측된 값으로, 자동 탐색(src/discovery.py)을 끄거나
+# 탐색이 아무것도 찾지 못했을 때 쓰이는 폴백이다. 기본 경로에서는 사용되지 않는다.
 REDUNDANT_PAIRS = [
     ("X_04", "X_39"), ("X_05", "X_25"), ("X_26", "X_30"), ("X_38", "X_47"),
     ("X_07", "X_33"), ("X_12", "X_21"), ("X_09", "X_20"), ("X_20", "X_22"),
     ("X_05", "X_51"), ("X_09", "X_51"), ("X_22", "X_25"), ("X_05", "X_09"),
 ]
-# 완전 중복 (corr = 1.0) — DL 입력에서 하나 제거
+# 완전 중복 (corr = 1.0) — DL 입력에서 하나 제거 (폴백)
 EXACT_DUP_DROP = ["X_45", "X_17"]
 
 ROW_STAT_COLS = ["row_mean", "row_std", "row_min", "row_max", "row_iqr",
@@ -118,16 +119,28 @@ def add_row_stats(Xtr, Xva, Xte, feat_cols):
 # --------------------------------------------------------------------------
 # FDI (analytical redundancy) residuals
 # --------------------------------------------------------------------------
-def compute_fdi_stats(df, feat_cols):
-    """잔차 표준화에 쓸 train 통계. 반드시 train에서만 호출한다."""
+def compute_fdi_stats(df, feat_cols, pairs=None, dev_cols=None, drop_cols=None):
+    """잔차 표준화에 쓸 train 통계. 반드시 train에서만 호출한다.
+
+    pairs / dev_cols / drop_cols 를 주지 않으면 모듈 상단의 폴백 상수를 쓴다.
+    기본 경로에서는 FeaturePipeline 이 discovery 결과를 넣어준다.
+    """
     cols = [c for c in feat_cols if c in df.columns]
     sd = df[cols].std().replace(0, 1.0)
+    if pairs is None:
+        pairs = REDUNDANT_PAIRS
+    if dev_cols is None:
+        dev_cols = ["X_48"]
+    if drop_cols is None:
+        drop_cols = EXACT_DUP_DROP
     return {
         "cols": cols,
         "mu": df[cols].mean().to_dict(),
         "sd": sd.to_dict(),
         "med": df[cols].median().to_dict(),
-        "pairs": [(a, b) for a, b in REDUNDANT_PAIRS if a in cols and b in cols],
+        "pairs": [(a, b) for a, b in pairs if a in cols and b in cols],
+        "dev_cols": [c for c in dev_cols if c in cols],
+        "drop_cols": [c for c in drop_cols if c in cols],
     }
 
 
@@ -144,11 +157,12 @@ def apply_fdi_features(df, stats, drop_exact_dup=True):
     mad = np.abs(out[cols].values.astype(float) - med_s[None, :])
     out["dev_mean"] = np.nanmean(mad, axis=1)
     out["dev_max"] = np.nanmax(mad, axis=1)
-    if "X_48" in cols:
-        out["dev_X48"] = (out["X_48"] - med["X_48"]).abs()
+    for c in stats.get("dev_cols", []):
+        if c in out.columns:
+            out[f"dev_{c}"] = (out[c] - med[c]).abs()
 
     if drop_exact_dup:
-        out = out.drop(columns=EXACT_DUP_DROP, errors="ignore")
+        out = out.drop(columns=stats.get("drop_cols", EXACT_DUP_DROP), errors="ignore")
     return out
 
 

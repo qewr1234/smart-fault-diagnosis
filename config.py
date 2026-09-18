@@ -23,8 +23,18 @@ CONFIG = {
     "ADD_PAIRDIFF": True,
     "USE_ISOFOREST": True,
     "USE_FDI_FEATURES": True,   # 잔차 + 편차 시그니처 (핵심 추가)
-    "CLIP_X11": True,           # X_11 train 극단값 -> test 분위수 클리핑
+    "CLIP_SHIFT_COLS": True,    # train 극단 꼬리 -> 참조(test) 분위수로 클리핑
     "PCA_COMPONENTS": 0,
+
+    # 자동 탐색 (하드코딩된 센서쌍/컬럼/클러스터 대체)
+    "AUTO_DISCOVER": True,      # False면 features.py 의 폴백 상수를 쓴다
+    "CORR_THRESHOLD": 0.95,     # 준중복 센서쌍 기준 |corr|
+    "EXACT_DUP_THRESHOLD": 0.9999,  # 완전 중복으로 묶어 하나만 남길 기준
+    "MAX_REDUNDANT_PAIRS": 12,  # 잔차 피처를 만들 쌍 수 상한
+    "SHIFT_EXCESS_RATIO": 1.0,  # 꼬리 길이 / 참조 분포 폭 (이상이면 shift 컬럼)
+    "SHIFT_OUTSIDE_FRAC": 0.02, # 참조 범위 밖 train 행 비율 상한
+    "MAX_SHIFT_COLS": 3,
+    "N_SIGNATURE_COLS": 1,      # 클래스별 산포가 크게 다른 컬럼 수 (0=비활성)
 
     # Training
     "EPOCHS": 140,
@@ -62,7 +72,11 @@ CONFIG = {
 
     # Hard-cluster expert (LightGBM)
     "USE_EXPERT": True,
-    "HARD_CLUSTER": [0, 3, 9, 15, 19],
+    # "auto" = 검증 예측의 혼동 구조에서 도출. 리스트를 주면 그 값을 고정으로 쓴다.
+    "HARD_CLUSTER": "auto",
+    "CLUSTER_F1_QUANTILE": 0.35,   # 후보로 삼을 저성능 클래스 분위
+    "CLUSTER_MIN_CONFUSION": 0.05, # 두 클래스를 이을 상호 오분류율 하한
+    "CLUSTER_MAX_SIZE": 8,
     "EXPERT_W_GRID": [0.0, 0.25, 0.5],   # OOF Macro-F1로 선택 (0.0 = 미적용)
     "EXPERT_N_ESTIMATORS": 600,
 
