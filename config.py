@@ -13,6 +13,11 @@ CONFIG = {
     "CV_SEED": 42,
     "SEEDS": [42, 52, 62],   # --fast 시 [42]로 축소
 
+    # 검증 정직성 (OOF 편향 방지)
+    "NESTED_CALIBRATION": True,   # early stopping/온도를 fold 내부 홀드아웃에서 결정
+    "INNER_VAL_FRAC": 0.15,       # 내부 홀드아웃 비율
+    "NESTED_POSTPROCESS_FOLDS": 5,  # 후처리 기여도의 정직한 추정에 쓸 fold 수 (0=생략)
+
     # Feature Eng
     "TOPK_VAR": 16,
     "ADD_PAIRDIFF": True,

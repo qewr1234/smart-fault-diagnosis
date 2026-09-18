@@ -195,6 +195,104 @@ if _HAVE_TORCH:
                 ]), p=2)
 
 
+ARCHITECTURES = {
+    "ft": dict(cls="FTTransformerTiny",
+               kwargs=dict(d_model=160, heads=8, layers=4, dropout=0.25, mlp=2.0, feat_drop=0.10)),
+    "mixer": dict(cls="TabMixer",
+                  kwargs=dict(d_model=160, layers=5, tok_exp=2.0, chan_exp=2.0, p=0.25, feat_drop=0.10)),
+    "glu": dict(cls="GLUMLP", kwargs=dict(width=512, depth=6, p=0.25)),
+}
+
+
+def build_model(arch, n_features, n_classes):
+    """이름으로 아키텍처를 재구성한다 (체크포인트 복원에 사용)."""
+    if arch not in ARCHITECTURES:
+        raise KeyError(f"알 수 없는 아키텍처: {arch} (가능: {sorted(ARCHITECTURES)})")
+    spec = ARCHITECTURES[arch]
+    cls = globals()[spec["cls"]]
+    return cls(n_features, n_classes, **spec["kwargs"])
+
+
+class TorchPredictor:
+    """학습된 모델 + 정규화 통계 + 온도를 함께 들고 다니는 호출 가능 예측기.
+
+    학습 코드와 추론 코드가 같은 객체를 쓰므로 전처리가 갈라질 수 없다.
+    `temperature`는 학습 시 내부 홀드아웃에서 정하고, 예측마다 자동 적용된다.
+    """
+
+    def __init__(self, model, mu, std, arch=None, n_features=None, n_classes=None,
+                 temperature=1.0, batch_size=512):
+        self.model = model
+        self.mu = np.asarray(mu, dtype=np.float64)
+        self.std = np.asarray(std, dtype=np.float64)
+        self.arch = arch
+        self.n_features = n_features
+        self.n_classes = n_classes
+        self.temperature = float(temperature)
+        self.batch_size = batch_size
+
+    @property
+    def device(self):
+        return next(self.model.parameters()).device
+
+    def __call__(self, Xt, mc_passes=1, enable_dropout=False, tta_noise_std=0.0,
+                 apply_temperature=True):
+        device = self.device
+        Z = np.nan_to_num((np.asarray(Xt) - self.mu) / self.std, posinf=0.0, neginf=0.0)
+        Xt_t = torch.tensor(Z, dtype=torch.float32, device=device)
+        n_pass = mc_passes if (enable_dropout and mc_passes > 1) else 1
+        self.model.train() if n_pass > 1 else self.model.eval()
+        preds = []
+        with torch.no_grad():
+            for _ in range(n_pass):
+                out = []
+                for i in range(0, Xt_t.size(0), self.batch_size):
+                    xb = Xt_t[i:i + self.batch_size]
+                    if tta_noise_std > 0:
+                        xb = xb + torch.randn_like(xb) * tta_noise_std
+                    logits = self.model(xb).float()
+                    if apply_temperature and self.temperature != 1.0:
+                        logits = logits / self.temperature
+                    out.append(F.softmax(logits, dim=-1).cpu().numpy())
+                preds.append(np.vstack(out))
+        self.model.eval()
+        return ensure_prob_finite(np.mean(preds, axis=0))
+
+    def save(self, path):
+        if self.arch is None:
+            raise ValueError("arch 가 없는 예측기는 저장할 수 없습니다.")
+        torch.save({
+            "arch": self.arch,
+            "n_features": int(self.n_features),
+            "n_classes": int(self.n_classes),
+            "temperature": float(self.temperature),
+            "mu": self.mu,
+            "std": self.std,
+            "state_dict": {k: v.detach().cpu() for k, v in self.model.state_dict().items()},
+        }, path)
+
+    @staticmethod
+    def load(path, device=None):
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        model = build_model(ckpt["arch"], ckpt["n_features"], ckpt["n_classes"])
+        model.load_state_dict(ckpt["state_dict"])
+        device = device or resolve_device()
+        model.to(device).eval()
+        return TorchPredictor(model, ckpt["mu"], ckpt["std"], arch=ckpt["arch"],
+                              n_features=ckpt["n_features"], n_classes=ckpt["n_classes"],
+                              temperature=ckpt["temperature"])
+
+
+def resolve_device():
+    if not _HAVE_TORCH:
+        return "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def fit_torch_model(
     model, Xtr, ytr, Xva, yva,
     lr=3e-3, wd=1e-4, epochs=120, bs=256,
@@ -202,11 +300,11 @@ def fit_torch_model(
     class_weights=None, loss_mode="ce", focal_gamma=2.0,
     mixup_alpha=0.0, rdrop_alpha=0.0, use_sam=False, sam_rho=0.05,
     mc_dropout=False, tta_noise_std=0.0, amp_enabled=True,
+    arch=None, n_classes=None,
 ):
     """v16의 학습 루프. best-F1 스냅샷 복원 + predict 클로저 반환."""
     assert _HAVE_TORCH, "PyTorch not available."
-    device = "cuda" if torch.cuda.is_available() else (
-        "mps" if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() else "cpu")
+    device = resolve_device()
     model = model.to(device)
     if live:
         print(f"[{name}] epochs={epochs}, bs={bs}, device={device}, amp={amp_enabled}, sam={use_sam}")
@@ -252,7 +350,7 @@ def fit_torch_model(
         for g in opt.param_groups:
             g["lr"] = lr_now
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(amp_enabled and device == "cuda"))
+    scaler = torch.amp.GradScaler("cuda", enabled=(amp_enabled and device == "cuda"))
     from sklearn.metrics import f1_score as _f1
 
     best_f1, best = -1.0, None
@@ -280,17 +378,17 @@ def fit_torch_model(
 
             if use_sam:
                 opt.zero_grad()
-                with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+                with torch.amp.autocast("cuda", enabled=scaler.is_enabled()):
                     out1 = model(xb_in)
                     loss1 = loss_fn(out1)
                 scaler.scale(loss1).backward()
                 opt.first_step(zero_grad=True)
 
-                with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+                with torch.amp.autocast("cuda", enabled=scaler.is_enabled()):
                     out2 = model(xb_in)
                     loss2 = loss_fn(out2)
                     if rdrop_alpha and rdrop_alpha > 0.0:
-                        loss2 = loss2 + rdrop_alpha * symmetric_kl(out1, out2)
+                        loss2 = loss2 + rdrop_alpha * symmetric_kl(out1.detach(), out2)
                 scaler.scale(loss2).backward()
                 scaler.unscale_(opt.base_optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -299,7 +397,7 @@ def fit_torch_model(
                 cur_loss = 0.5 * (loss1.detach() + loss2.detach()).item()
             else:
                 opt.zero_grad()
-                with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+                with torch.amp.autocast("cuda", enabled=scaler.is_enabled()):
                     out = model(xb_in)
                     loss = loss_fn(out)
                     if rdrop_alpha and rdrop_alpha > 0.0:
@@ -320,7 +418,7 @@ def fit_torch_model(
         outs = []
         with torch.no_grad():
             for i in range(0, Xva_t.size(0), 512):
-                with torch.cuda.amp.autocast(enabled=False):
+                with torch.amp.autocast("cuda", enabled=False):
                     logits = model(Xva_t[i:i + 512])
                 outs.append(F.softmax(logits, dim=-1).cpu().numpy())
         pva = ensure_prob_finite(np.vstack(outs))
@@ -342,37 +440,28 @@ def fit_torch_model(
         best = {k: v.detach().cpu() for k, v in model.state_dict().items()}
     model.load_state_dict(best)
 
-    def predict(Xt, mc_passes=1, enable_dropout=False, tta_noise_std=0.0):
-        Z = np.nan_to_num((Xt - mu) / std, posinf=0.0, neginf=0.0)
-        Xt_t = torch.tensor(Z, dtype=torch.float32, device=device)
-        preds = []
-        n_pass = mc_passes if (enable_dropout and mc_passes > 1) else 1
-        model.train() if n_pass > 1 else model.eval()
-        with torch.no_grad():
-            for _ in range(n_pass):
-                out = []
-                for i in range(0, Xt_t.size(0), 512):
-                    xb = Xt_t[i:i + 512]
-                    if tta_noise_std > 0:
-                        xb = xb + torch.randn_like(xb) * tta_noise_std
-                    out.append(F.softmax(model(xb), dim=-1).cpu().numpy())
-                preds.append(np.vstack(out))
-        model.eval()
-        return ensure_prob_finite(np.mean(preds, axis=0))
+    predictor = TorchPredictor(model, mu, std, arch=arch, n_features=Xtr.shape[1],
+                               n_classes=int(np.max(ytr)) + 1 if n_classes is None else n_classes)
+    return model, predictor
 
-    return model, predict
+
+DISPLAY_NAMES = {"ft": "FT-Trans", "mixer": "TabMixer", "glu": "GLU-MLP"}
+
+
+def fit_architecture(arch, Xtr, ytr, Xva, yva, K, **kw):
+    """이름으로 아키텍처를 만들고 학습한다. (model, TorchPredictor) 반환."""
+    model = build_model(arch, Xtr.shape[1], K)
+    return fit_torch_model(model, Xtr, ytr, Xva, yva, name=DISPLAY_NAMES.get(arch, arch),
+                           arch=arch, n_classes=K, **kw)
 
 
 def fit_ft(Xtr, ytr, Xva, yva, K, **kw):
-    model = FTTransformerTiny(Xtr.shape[1], K, d_model=160, heads=8, layers=4, dropout=0.25, mlp=2.0, feat_drop=0.10)
-    return fit_torch_model(model, Xtr, ytr, Xva, yva, name="FT-Trans", **kw)
+    return fit_architecture("ft", Xtr, ytr, Xva, yva, K, **kw)
 
 
 def fit_tabmixer(Xtr, ytr, Xva, yva, K, **kw):
-    model = TabMixer(Xtr.shape[1], K, d_model=160, layers=5, tok_exp=2.0, chan_exp=2.0, p=0.25, feat_drop=0.10)
-    return fit_torch_model(model, Xtr, ytr, Xva, yva, name="TabMixer", **kw)
+    return fit_architecture("mixer", Xtr, ytr, Xva, yva, K, **kw)
 
 
 def fit_glumlp(Xtr, ytr, Xva, yva, K, **kw):
-    model = GLUMLP(Xtr.shape[1], K, width=512, depth=6, p=0.25)
-    return fit_torch_model(model, Xtr, ytr, Xva, yva, name="GLU-MLP", **kw)
+    return fit_architecture("glu", Xtr, ytr, Xva, yva, K, **kw)
