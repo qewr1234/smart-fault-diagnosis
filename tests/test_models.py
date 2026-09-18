@@ -87,3 +87,45 @@ def test_architecture_factories_forward(small_xy, fitter):
     p = predict(Xva)
     assert p.shape == (len(yva), N_CLASSES)
     assert np.isfinite(p).all()
+
+
+def test_predictor_save_load_reproduces_probabilities(small_xy, tmp_path):
+    """체크포인트 왕복이 확률을 정확히 재현해야 추론 경로를 신뢰할 수 있다."""
+    from src.models import TorchPredictor
+    Xtr, ytr, Xva, yva = _split(small_xy)
+    kw = dict(BASE_KW, epochs=1)
+    _, predictor = fit_glumlp(Xtr, ytr, Xva, yva, N_CLASSES, use_sam=False, **kw)
+    predictor.temperature = 1.07
+    before = predictor(Xva)
+
+    path = tmp_path / "model_glu.pt"
+    predictor.save(path)
+    restored = TorchPredictor.load(path)
+    assert restored.arch == "glu"
+    assert restored.temperature == pytest.approx(1.07)
+    np.testing.assert_allclose(restored(Xva), before, rtol=1e-6, atol=1e-6)
+
+
+def test_predictor_temperature_changes_confidence_not_ranking(small_xy):
+    Xtr, ytr, Xva, yva = _split(small_xy)
+    kw = dict(BASE_KW, epochs=1)
+    _, predictor = fit_glumlp(Xtr, ytr, Xva, yva, N_CLASSES, use_sam=False, **kw)
+    raw = predictor(Xva, apply_temperature=False)
+    predictor.temperature = 2.0
+    warm = predictor(Xva)
+    np.testing.assert_array_equal(raw.argmax(1), warm.argmax(1))   # 순위 불변
+    assert warm.max(1).mean() < raw.max(1).mean()                  # 확신도는 낮아짐
+
+
+def test_build_model_rejects_unknown_architecture():
+    from src.models import build_model
+    with pytest.raises(KeyError):
+        build_model("no_such_arch", 10, N_CLASSES)
+
+
+def test_predictor_without_arch_cannot_be_saved(small_xy, tmp_path):
+    Xtr, ytr, Xva, yva = _split(small_xy)
+    _, predictor = fit_torch_model(_tiny_model(Xtr.shape[1]), Xtr, ytr, Xva, yva,
+                                   use_sam=False, **BASE_KW)
+    with pytest.raises(ValueError):
+        predictor.save(tmp_path / "x.pt")
