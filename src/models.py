@@ -290,7 +290,7 @@ def fit_torch_model(
                     out2 = model(xb_in)
                     loss2 = loss_fn(out2)
                     if rdrop_alpha and rdrop_alpha > 0.0:
-                        loss2 = loss2 + rdrop_alpha * symmetric_kl(out1, out2)
+                        loss2 = loss2 + rdrop_alpha * symmetric_kl(out1.detach(), out2)
                 scaler.scale(loss2).backward()
                 scaler.unscale_(opt.base_optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

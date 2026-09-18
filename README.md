@@ -47,6 +47,8 @@ smart-fault-diagnosis/
 ├── .gitignore
 ├── config.py            # 모든 하이퍼파라미터 / 경로 설정
 ├── train.py             # 원클릭 실행 진입점
+├── pytest.ini
+├── requirements-dev.txt
 ├── src/
 │   ├── utils.py         # 시드, 메트릭, 확률 유틸
 │   ├── features.py      # FE + FDI 잔차 피처 + X_11 클리핑
@@ -54,6 +56,7 @@ smart-fault-diagnosis/
 │   ├── expert.py        # 하드클러스터 LightGBM 전문가 + 리랭킹
 │   ├── calibration.py   # 온도/바이어스/EM/Sinkhorn 균형 배정
 │   └── blend.py         # OOF 그리디 가중치 탐색 (prob/logit/geomean)
+├── tests/               # pytest (합성 데이터, CPU)
 ├── data/                # train.csv, test.csv, sample_submission.csv (git 미포함)
 └── outputs/             # 제출 파일 저장 (git 미포함)
 ```
@@ -91,6 +94,19 @@ python train.py --seeds 42       # 시드 지정
 ```
 
 완료 시 `outputs/submission_<VERSION>_<timestamp>.csv`가 생성됩니다.
+
+## 테스트
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q                 # 전체 (엔드투엔드 스모크 포함, CPU 약 2분)
+python -m pytest -q -m "not slow"   # 단위 테스트만
+```
+
+`tests/`는 실제 데이터 없이 합성 센서 데이터로 동작합니다.
+학습 루프의 정규화 조합(SAM / R-Drop / MixUp), 전문가 리랭킹의 확률 질량 보존,
+후처리 게이트의 비퇴행성, FDI 잔차의 train-only 통계, `train.run()` 완주를 검증하며
+GitHub Actions(`.github/workflows/tests.yml`)에서 push마다 실행됩니다.
 
 ## 주요 설정 (config.py)
 
