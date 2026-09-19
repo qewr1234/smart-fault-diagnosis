@@ -1,0 +1,131 @@
+{
+  "model": "torchvision VGG11_Weights.IMAGENET1K_V1",
+  "layer": "features.3",
+  "input_image_size": [
+    224,
+    224
+  ],
+  "layer_cin": 64,
+  "layer_cout": 128,
+  "taps": 576,
+  "activation_scale": 0.1434324069285956,
+  "weight_scale": 0.00616151235235019,
+  "zero_point": 0,
+  "calibration_rule": "full feature maximum of calibration images only",
+  "rounding": "numpy nearest ties-to-even; activation clipping 0..127",
+  "manifest": {
+    "images\\calibration\\L-SAM.jpg": {
+      "file_sha256": "46a27153b3ec073dcd87dcec0ffc023c5374d370f0ce8eeb2da537e65c4a4c2b",
+      "preprocessed_sha256": "1f171e9ad05d1070614e9ee8ecadfce81b029869ceffaf3667384ead8be8407d",
+      "split": "calibration"
+    },
+    "images\\calibration\\\uac15\uc544\uc9c0.jpg": {
+      "file_sha256": "f9c3bc8e574472c52a041d6b856a9f2233a9f9eb0689423c71d556c41cdad2bc",
+      "preprocessed_sha256": "e63cac5560f3eed8ee6d5695917c57dd6d62cff71842f3562faaee25505dc7eb",
+      "split": "calibration"
+    },
+    "images\\calibration\\\ub2e4\uc6b4\ub85c\ub4dc.jpg": {
+      "file_sha256": "a9f3206e928171f3fc11c10e8ed045b1a215087efd75b58ffda6c3179c078ebd",
+      "preprocessed_sha256": "96e0f2757330197a52740781139fd0e7d2292195a8002d5a306d34de88daa2a4",
+      "split": "calibration"
+    },
+    "images\\calibration\\\uc138\uc885\ub300\uc655\ud568.jpg": {
+      "file_sha256": "e42107062d84c74f50d8db207cf94bc8bae762bb47a57705d993d61f24b06317",
+      "preprocessed_sha256": "da7998d355cb15e7205a903c3d79eaca48aaa842d4adb59c4b0125dc732bcc3f",
+      "split": "calibration"
+    },
+    "images\\calibration\\\uc804\ucc28.jpg": {
+      "file_sha256": "b93c000af05718f6d988b613c7a9e17fd523df8e77e09c64b71acfd41b4380ea",
+      "preprocessed_sha256": "24c9477d14b56d96d6619f4876eae36272c991a8180e0fa9e02155ce64861208",
+      "split": "calibration"
+    },
+    "images\\calibration\\\uc804\ud22c\uae30.jpg": {
+      "file_sha256": "c037bba00f8473d6b4f17ae495e5b605b4e3232ea77f637ab1ff5e8346768f15",
+      "preprocessed_sha256": "c6185dd21abb82180f5b31d49ecc5e046614660817150d5fcf74ef4c800d301c",
+      "split": "calibration"
+    },
+    "images\\calibration\\\ucc9c\uad81.jpg": {
+      "file_sha256": "56eed3533c821b2b9c2f1b4f7278a3819c3cecd435dba1eb43b7a654a5fc1751",
+      "preprocessed_sha256": "8a4da24e11243425d8d378b1aeed3ab1a2eb7453b4f08fa94bed5dd98737fd31",
+      "split": "calibration"
+    },
+    "images\\calibration\\\ud5ec\uae30.jpg": {
+      "file_sha256": "c4305939ac3c8ea522a546e45e8a1da55cdc2d5a81695e8529b9f32f4be17b26",
+      "preprocessed_sha256": "104f3d493a421ba35e62e08d6918aa8e54d074eaeb63894ff38c3496b4f6ed1e",
+      "split": "calibration"
+    },
+    "images\\evaluation\\L-SAM.jpg": {
+      "file_sha256": "bab6395b8dad56ed4d25a07f23b09e2b4f08ea7deecedfc422c74343b882b42c",
+      "preprocessed_sha256": "b505e2465566ce37d1be3d3126149642235d26a0b194b11b98b4a323fa9c2ed8",
+      "split": "evaluation"
+    },
+    "images\\evaluation\\\uac15\uc544\uc9c0.jpg": {
+      "file_sha256": "56fc247f0309799665a5320c453e4bb6841993d04bd8046d88fd9d23cbbd3470",
+      "preprocessed_sha256": "4648dee96746a3512c5e85afe7afd0e81c032e3ad2a4c098a2bebfccfd399663",
+      "split": "evaluation"
+    },
+    "images\\evaluation\\\ub2e4\uc6b4\ub85c\ub4dc (1).jpg": {
+      "file_sha256": "09abcb32f0f3885ebff9a228c3199103e253ad9af1654f059af99d82eb76000f",
+      "preprocessed_sha256": "98e11b12a13ba25aaa4b2b566652a092596301d0abb7bcde5761b088333c60b0",
+      "split": "evaluation"
+    },
+    "images\\evaluation\\\uc138\uc885\ub300\uc655\ud568.jpg": {
+      "file_sha256": "1037d92ece1233d62b30c068d239e19f123f7a4b9959e2647682512d0f503cf2",
+      "preprocessed_sha256": "292d743ba711917d3eaab2cd125e95b9c6ce10f386390e5134c9c9f01697c98a",
+      "split": "evaluation"
+    },
+    "images\\evaluation\\\uc804\ucc28.jpg": {
+      "file_sha256": "e73e93f1ac5d2c3b065742240f949a0736db3f43eb06659c386308a719499d98",
+      "preprocessed_sha256": "0cf2b3911c7dc87c419f5a5d3f61c8d11e09b87739ea5deda26b3b9437e17660",
+      "split": "evaluation"
+    },
+    "images\\evaluation\\\uc804\ud22c\uae30.jpg": {
+      "file_sha256": "e99ccdc9be9f364a56df22c3cacfd3b371e1f81e0391d24f429021660a6fe744",
+      "preprocessed_sha256": "25142dc30ed445e727684251d93e2b29ad3b99865b5715b7b0a105083766c5eb",
+      "split": "evaluation"
+    },
+    "images\\evaluation\\\ucc9c\uad81.jpg": {
+      "file_sha256": "84de31e5f3602b4405cc18af7e2693c67553cc53f879855405bede6eb948d15b",
+      "preprocessed_sha256": "ff7371d307486ada0e1aa4bc4a5410e0c6847d95870a3ee5b70b26a86e028826",
+      "split": "evaluation"
+    },
+    "images\\evaluation\\\ud5ec\uae30.jpg": {
+      "file_sha256": "09dcc58657098a3429fce46f4d2dc132cb460d4c9014cea1149870aa91f47cf8",
+      "preprocessed_sha256": "736ba6f34931f31143a32b89c07feff267591823744216e8a123304515b0d2a8",
+      "split": "evaluation"
+    }
+  },
+  "report": {
+    "calibration": {
+      "images": 8,
+      "sampled_windows": 512,
+      "activation_clipped_fraction": 0.0,
+      "fp_output_zero_fraction": 0.5815582275390625,
+      "quant_output_zero_fraction": 0.57928466796875,
+      "relative_output_mse": 0.001807946534502245
+    },
+    "evaluation": {
+      "images": 8,
+      "sampled_windows": 512,
+      "activation_clipped_fraction": 0.0,
+      "fp_output_zero_fraction": 0.5837860107421875,
+      "quant_output_zero_fraction": 0.5806732177734375,
+      "relative_output_mse": 0.0020774106913857
+    }
+  },
+  "torch": "2.8.0+cpu",
+  "torchvision": "0.23.0+cpu",
+  "numpy": "2.0.2",
+  "source": "https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.vgg11.html",
+  "limits": [
+    "Sampled windows, not full-frame timing",
+    "Upstream layers float; selected layer locally quantized",
+    "No classification accuracy, FPGA timing, hardware energy or novelty established"
+  ],
+  "files_sha256": {
+    "calibration.wpr": "464e530fc2b35940f09f8a673643aea2f8cfe558f011e74cf768521c0c558045",
+    "calibration_locations.json": "6dee83904e3cb88fe929094c19aedf78ef579354662bda5bf2892c24f92a228a",
+    "evaluation.wpr": "28f063b646b4093145b3d05de2b217d3fbc062bf6336ceed1df7b6a1f10d214e",
+    "evaluation_locations.json": "6dee83904e3cb88fe929094c19aedf78ef579354662bda5bf2892c24f92a228a"
+  }
+}
