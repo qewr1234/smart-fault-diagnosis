@@ -12,6 +12,20 @@ outputs/<VERSION>_<timestamp>/
     ├── isoforest.joblib
     ├── model_<arch>.pt
     └── expert.joblib
+
+위는 train.py 가 쓰는 학습 산출물이다. 추론 진입점은 같은 디렉터리(또는 --out-dir)에
+다음을 덧붙이며, 실행 디렉터리를 읽기만 하고 학습 산출물은 바꾸지 않는다.
+
+predict.py
+├── submission_<VERSION>_<ts>.csv   제출 파일 (ID, target) — sample_submission.csv 의 ID 순
+├── test_probs_<ts>.npy             후처리된 test 확률 (제출 파일과 같은 <ts>, test.csv 순)
+└── diagnosis_<VERSION>_<ts>.csv    행 단위 진단 리포트 (src/report.py): 확신도·후보 클래스·
+                                    잔차 이상·이상치 점수(IsolationForest, 낮을수록 이상) +
+                                    센서 격리 판정·한 줄 메모(src/isolation.py).
+                                    제출 파일과 같은 ID 순서로 쓰되, 결합 키는 ID 다
+evaluate_isolation.py
+├── isolation_report.json           고장 주입 기반 센서 격리 평가 (커버리지/오경보율/크기별 성능)
+└── isolation_report.md             같은 내용의 한국어 리포트
 """
 import json
 from pathlib import Path

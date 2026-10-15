@@ -17,6 +17,7 @@ pytest.importorskip("torch")
 from config import CONFIG  # noqa: E402
 from predict import predict_run  # noqa: E402
 from src import artifacts  # noqa: E402
+from src.pipeline import FeaturePipeline  # noqa: E402
 from train import run  # noqa: E402
 
 N_CLASSES = 21
@@ -159,3 +160,39 @@ def test_predict_respects_sample_submission_row_order(trained_run, tmp_path):
     sub = pd.read_csv(predict_run(run_dir, data_dir=shuffled_dir, out_dir=tmp_path / "s", live=False))
     assert (sub["ID"].values == sample["ID"].values).all()
     assert sub["target"].notna().all()
+    # 진단 리포트도 제출 파일과 같은 ID 순서로 쓰여 두 파일을 나란히 읽을 수 있다
+    diag = pd.read_csv(sorted((tmp_path / "s").glob("diagnosis_*.csv"))[0])
+    assert (diag["ID"].values == sub["ID"].values).all()
+    assert (diag["pred"].values == sub["target"].values).all()
+
+
+@pytest.mark.slow
+def test_predict_writes_diagnosis_report_next_to_submission(trained_run, tmp_path):
+    """제출 파일 옆에 행 단위 진단 리포트(diagnosis_*.csv)가 같은 타임스탬프로 남아야 한다."""
+    run_dir, data_dir = trained_run
+    sub_path = Path(predict_run(run_dir, data_dir=data_dir, out_dir=tmp_path / "rep", live=False))
+    reports = sorted(sub_path.parent.glob("diagnosis_*.csv"))
+    assert len(reports) == 1
+    assert reports[0].name == sub_path.name.replace("submission_", "diagnosis_")
+
+    rep = pd.read_csv(reports[0])
+    test = pd.read_csv(data_dir / "test.csv")
+    assert len(rep) == len(test)
+    assert list(rep.columns) == [
+        "ID", "pred", "confidence", "top2", "top2_prob", "top3", "top3_prob", "margin",
+        "in_hard_cluster", "anomaly_score", "n_abnormal_residuals", "abnormal_residuals",
+        "involved_sensors", "suspect_sensor", "suspect_candidates", "isolation_ambiguous",
+        "isolation_note", "review_reasons", "needs_review",
+    ]
+    assert rep["needs_review"].dtype == bool
+    # 격리 열은 쌍이 없어도 존재하며 (CSV 재로딩 후) bool 로 읽힌다
+    assert rep["isolation_ambiguous"].dtype == bool
+    pipe = FeaturePipeline.load(run_dir / artifacts.PIPELINE_FILE)
+    if not pipe.fdi_stats.get("pairs"):
+        assert rep["suspect_sensor"].isna().all() and not rep["isolation_ambiguous"].any()
+    classes = json.loads((run_dir / artifacts.LABELS_FILE).read_text())
+    assert rep["pred"].isin(classes).all()
+    # 저장된 isoforest 가 있으므로 이상치 점수가 모든 행에 채워진다
+    assert rep["anomaly_score"].notna().all()
+    # 제출 파일은 여전히 두 열뿐이다
+    assert list(pd.read_csv(sub_path).columns) == ["ID", "target"]
