@@ -166,6 +166,34 @@ def apply_fdi_features(df, stats, drop_exact_dup=True):
     return out
 
 
+def residual_name(a, b):
+    return f"r_{a}_{b}"
+
+
+def residual_frame(df, stats):
+    """FDI 잔차 컬럼만 담은 프레임. 진단 리포트와 센서 고장 격리가 공유하는 계산.
+
+    표준화 잔차 r_ab = (x_a - mu_a)/sd_a - (x_b - mu_b)/sd_b. 통계는 train에서 온 것만 쓴다.
+    """
+    import pandas as pd
+    mu, sd = stats["mu"], stats["sd"]
+    cols = {}
+    for a, b in stats["pairs"]:
+        if a in df.columns and b in df.columns:
+            cols[residual_name(a, b)] = (df[a] - mu[a]) / sd[a] - (df[b] - mu[b]) / sd[b]
+    return pd.DataFrame(cols, index=df.index)
+
+
+def compute_residual_stats(df, stats):
+    """train 잔차의 평균/표준편차. 추론 시 잔차 z-score 를 매길 기준이 된다."""
+    R = residual_frame(df, stats)
+    out = {}
+    for c in R.columns:
+        std = float(R[c].std(ddof=1))
+        out[c] = {"mean": float(R[c].mean()), "std": std if std > 1e-12 else 1.0}
+    return out
+
+
 def add_fdi_features(df_train, df_test, feat_cols, drop_exact_dup=True, live=False):
     """호환 래퍼: train에서 통계를 산출해 train/test 양쪽에 적용."""
     stats = compute_fdi_stats(df_train, feat_cols)

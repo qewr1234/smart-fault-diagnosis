@@ -16,7 +16,8 @@ from .discovery import (
 )
 from .features import (
     apply_fdi_features, apply_pairwise, apply_row_stats, apply_winsor_bounds,
-    compute_fdi_stats, compute_winsor_bounds, select_pairs,
+    compute_fdi_stats, compute_residual_stats, compute_winsor_bounds, residual_frame,
+    select_pairs,
 )
 
 
@@ -48,6 +49,7 @@ class FeaturePipeline:
     clip_bounds: dict = field(default_factory=dict)
     winsor_bounds: dict = field(default_factory=dict)
     fdi_stats: dict = field(default_factory=dict)
+    residual_stats: dict = field(default_factory=dict)   # train 잔차 평균/표준편차 (z-score 기준)
     pairs: list = field(default_factory=list)
     row_stat_cols: list = field(default_factory=list)
     imputer: object = None
@@ -101,6 +103,9 @@ class FeaturePipeline:
                     dev_cols = []
             self.fdi_stats = compute_fdi_stats(X, self.feat_cols, pairs=pairs,
                                                dev_cols=dev_cols, drop_cols=drop_cols)
+            # 잔차 z-score 기준은 클리핑/윈저 전의 원본 train 값으로 잡는다.
+            # 추론·격리 쪽은 원본 프레임에서 잔차를 계산하기 때문이다.
+            self.residual_stats = compute_residual_stats(df_train[self.feat_cols], self.fdi_stats)
             X = apply_fdi_features(X, self.fdi_stats)
 
         if self.add_pairdiff:
@@ -139,6 +144,29 @@ class FeaturePipeline:
 
         M = self.imputer.transform(X)
         return self.variance_filter.transform(M)
+
+    # ---------------- 잔차 접근 ----------------
+    def residuals(self, df):
+        """원본 프레임에서 FDI 잔차 프레임을 계산한다 (진단 리포트/격리용)."""
+        if not self.use_fdi or not self.fdi_stats:
+            import pandas as pd
+            return pd.DataFrame(index=df.index)
+        return residual_frame(df, self.fdi_stats)
+
+    def residual_zscores(self, df):
+        """train 잔차 분포 기준 z-score. 열 = 잔차 이름."""
+        R = self.residuals(df)
+        for c in R.columns:
+            st = getattr(self, "residual_stats", {}).get(c, {"mean": 0.0, "std": 1.0})
+            R[c] = (R[c] - st["mean"]) / st["std"]
+        return R
+
+    def feature_names_out(self):
+        """transform 결과 행렬의 열 이름 (분산 필터 통과 후)."""
+        if not self.fitted:
+            raise RuntimeError("FeaturePipeline.fit() 을 먼저 호출해야 합니다.")
+        mask = self.variance_filter.get_support()
+        return [c for c, keep in zip(self.output_columns, mask) if keep]
 
     # ---------------- 보고 ----------------
     def discovery_report(self):

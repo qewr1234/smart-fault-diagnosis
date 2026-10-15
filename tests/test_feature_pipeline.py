@@ -165,3 +165,45 @@ def test_augment_with_anomaly_score_adds_one_column(frames):
     assert augment_with_anomaly_score(M, None).shape == M.shape
     iso = IsolationForest(n_estimators=10, random_state=0).fit(M)
     assert augment_with_anomaly_score(M, iso).shape == (M.shape[0], M.shape[1] + 1)
+
+
+def test_residual_zscores_are_standardized_on_train(frames):
+    """train 자신의 잔차 z-score 는 평균 0, 표준편차 1 근처여야 한다."""
+    tr, te = frames
+    pipe = _pipe()
+    pipe.fit(tr, te)
+    if not pipe.fdi_stats["pairs"]:
+        pytest.skip("합성 데이터에 준중복 쌍이 없음")
+    Z = pipe.residual_zscores(tr)
+    assert list(Z.columns) == list(pipe.residual_stats)
+    np.testing.assert_allclose(Z.mean(0).values, 0.0, atol=1e-9)
+    np.testing.assert_allclose(Z.std(0, ddof=1).values, 1.0, atol=1e-9)
+
+
+def test_residual_zscores_flag_an_injected_sensor_bias():
+    """센서 하나에 바이어스를 주입하면 그 센서가 포함된 잔차만 커져야 한다."""
+    rng = np.random.default_rng(77)
+    n = 600
+    base = rng.normal(size=(n, 52))
+    tr = pd.DataFrame(base, columns=FEAT_COLS)
+    tr["X_02"] = tr["X_01"] + rng.normal(scale=0.05, size=n)   # 준중복 쌍 심기
+    tr["X_04"] = tr["X_03"] + rng.normal(scale=0.05, size=n)
+    te = tr.iloc[:50].copy().reset_index(drop=True)
+    pipe = FeaturePipeline(feat_cols=FEAT_COLS, clip_shift=False)
+    pipe.fit(tr, None)
+    assert ("X_01", "X_02") in pipe.fdi_stats["pairs"]
+
+    faulty = te.copy()
+    faulty["X_01"] = faulty["X_01"] + 5.0           # X_01 센서 드리프트
+    Z = pipe.residual_zscores(faulty)
+    assert (Z["r_X_01_X_02"].abs() > 3).mean() > 0.95
+    assert (Z["r_X_03_X_04"].abs() > 3).mean() < 0.05
+
+
+def test_feature_names_out_matches_transform_width(frames):
+    tr, te = frames
+    pipe = _pipe()
+    M = pipe.fit(tr, te)
+    names = pipe.feature_names_out()
+    assert len(names) == M.shape[1] == pipe.n_features_out
+    assert len(set(names)) == len(names)
